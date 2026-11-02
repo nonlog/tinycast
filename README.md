@@ -1,5 +1,11 @@
 # Tinycast
 
+> **Windows fork:** This repository includes an unofficial, native C++/Win32 Windows
+> preview in [`windows/`](windows/README.md). It has no WebView runtime. It is a partial
+> feature port, not a Windows build of the SwiftUI app. See the
+> [feature matrix](windows/PORTING.md) and the Windows Actions workflow. The original
+> macOS project and its documentation remain below.
+
 **A tiny, fully native macOS launcher. One hotkey, everything you reach for all day, under 100 MB of
 RAM.**
 

@@ -1,0 +1,140 @@
+name: Windows native preview
+
+on:
+  push:
+    branches: [main]
+    tags: ['windows-v*']
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  pull_request:
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build-test-package:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Configure native x64 build
+        run: |
+          cmake -S windows -B windows/build -A x64 -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
+
+      - name: Build release and test executables
+        run: |
+          cmake --build windows/build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Native compilation failed' }
+
+      - name: Run deterministic core and isolated platform tests
+        run: |
+          ctest --test-dir windows/build -C Release --output-on-failure --verbose --output-junit test-results.xml
+          if ($LASTEXITCODE -ne 0) { throw 'CTest failed' }
+
+      - name: Run native UI smoke tests in both themes
+        run: |
+          New-Item windows/test-output -ItemType Directory -Force | Out-Null
+          foreach ($theme in @('dark', 'light')) {
+            $capture = Join-Path $PWD "windows/test-output/$theme.bmp"
+            $diagnostics = Join-Path $PWD "windows/test-output/$theme.json"
+            $arguments = @('--smoke-test', '--theme', $theme, '--capture', "`"$capture`"", '--diagnostics', "`"$diagnostics`"")
+            $process = Start-Process windows/build/Release/Tinycast.exe -ArgumentList $arguments -PassThru
+            if (-not $process.WaitForExit(30000)) {
+              $process.Kill()
+              throw "UI smoke test timed out: $theme"
+            }
+            if ($process.ExitCode -ne 0) { throw "UI smoke test failed: $theme ($($process.ExitCode))" }
+            $report = Get-Content $diagnostics -Raw | ConvertFrom-Json
+            if ($report.smokeFailures -ne 0 -or $report.clipboardListening) { throw 'Smoke assertions failed' }
+            Get-Content $diagnostics
+          }
+
+      - name: Package traceable portable build
+        env:
+          BUILD_SHA: ${{ github.sha }}
+          BUILD_REPOSITORY: ${{ github.repository }}
+          BUILD_RUN: ${{ github.run_id }}
+        run: |
+          $stage = 'windows/dist/package'
+          New-Item $stage -ItemType Directory -Force | Out-Null
+          Copy-Item windows/build/Release/Tinycast.exe $stage
+          Copy-Item LICENSE, NOTICE.md $stage
+          Copy-Item windows/README.md "$stage/README-Windows.md"
+          Copy-Item windows/settings.example.json $stage
+          Copy-Item windows/PORTING.md $stage
+          @{
+            version = '0.1.0-preview.1'
+            commit = $env:BUILD_SHA
+            repository = $env:BUILD_REPOSITORY
+            source = "https://github.com/$($env:BUILD_REPOSITORY)/tree/$($env:BUILD_SHA)"
+            ciRun = "https://github.com/$($env:BUILD_REPOSITORY)/actions/runs/$($env:BUILD_RUN)"
+            architecture = 'x64'
+            license = 'AGPL-3.0'
+            signed = $false
+          } | ConvertTo-Json | Set-Content "$stage/build-info.json" -Encoding utf8
+          "Corresponding source: https://github.com/$($env:BUILD_REPOSITORY)/tree/$($env:BUILD_SHA)`nLicense: AGPL-3.0`nThis is an unofficial Windows adaptation, not an upstream release." | Set-Content "$stage/SOURCE.txt" -Encoding utf8
+          Compress-Archive -Path "$stage/*" -DestinationPath windows/dist/Tinycast-Windows-x64.zip -Force
+          $hash = (Get-FileHash windows/dist/Tinycast-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Tinycast-Windows-x64.zip" | Set-Content windows/dist/SHA256SUMS.txt -Encoding ascii
+          "## Windows native preview`n`n- Core/platform tests and native light/dark UI smoke tests passed.`n- Artifact SHA-256: ``$hash```n- Commit: ``$($env:BUILD_SHA)```n- Not tested: real CJK IME, elevated-window interactions, mixed-DPI physical monitors.`n- No macOS build was run." >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Tinycast-Windows-x64-${{ github.sha }}
+          path: |
+            windows/dist/Tinycast-Windows-x64.zip
+            windows/dist/SHA256SUMS.txt
+          retention-days: 3
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: Windows-test-evidence-${{ github.sha }}
+          path: |
+            windows/build/test-results.xml
+            windows/build/Testing/Temporary/LastTest.log
+            windows/test-output/
+          retention-days: 3
+          if-no-files-found: warn
+
+  publish-preview:
+    if: startsWith(github.ref, 'refs/tags/windows-v')
+    needs: build-test-package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: Tinycast-Windows-x64-${{ github.sha }}
+          path: dist
+      - name: Publish verified Windows preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<'EOF'
+          Native C++20/Win32 Windows preview. No WebView, Electron, Node or .NET runtime.
+
+          Includes application search, global shortcut/tray, calculator and basic unit conversion, opt-in in-memory text clipboard history, filename search in selected folders, quicklinks, snippets, confirmed custom commands and basic window placement.
+
+          This is not feature-complete Tinycast for Windows: Raycast extensions, AI/MCP, dictation, calendar, image clipboard/OCR, full calculator parity and several macOS integrations are not ported. See README-Windows.md and PORTING.md inside the archive.
+
+          Default shortcut: Ctrl+Alt+Space. Clipboard history and sign-in startup are off by default. Unsigned x64 executable; no administrator access required. Each package contains the exact source commit and license.
+          EOF
+          gh release create "$TAG" dist/Tinycast-Windows-x64.zip dist/SHA256SUMS.txt \
+            --title "Tinycast Windows ${TAG#windows-v}" --prerelease --notes-file notes.md

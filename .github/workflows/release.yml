@@ -23,6 +23,7 @@ permissions:
 
 jobs:
   build:
+    if: github.repository == 'abue-ammar/tinycast'
     runs-on: xcode-27
     # Consumed by the `universal` job, so the channel identity is derived in exactly one place.
     outputs:

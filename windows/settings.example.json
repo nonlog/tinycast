@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "theme": "system",
+  "language": "system",
+  "hotkeyModifiers": 3,
+  "hotkeyKey": 32,
+  "clipboardEnabled": false,
+  "clipboardLimit": 100,
+  "windowGap": 8,
+  "fileRoots": [],
+  "quicklinks": [
+    { "name": "Google", "keyword": "g", "url": "https://www.google.com/search?q={query}" },
+    { "name": "GitHub", "keyword": "gh", "url": "https://github.com/search?q={query}" }
+  ],
+  "snippets": [
+    { "name": "Dated note", "text": "{date} {time}\n{query}" }
+  ],
+  "commands": [],
+  "favorites": [],
+  "usage": {}
+}
