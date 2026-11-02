@@ -1,4 +1,5 @@
 #include "palette.hpp"
+#include <objbase.h>
 #include <shellapi.h>
 #include <filesystem>
 #include <stdexcept>

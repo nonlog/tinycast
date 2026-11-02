@@ -171,10 +171,10 @@ bool App::create(HINSTANCE instance, const std::wstring& className) {
     if (!window_) return false;
     dpi_ = GetDpiForWindow(window_);
     search_ = CreateWindowExW(0, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                              0, 0, 10, 10, window_, reinterpret_cast<HMENU>(SearchID), instance, nullptr);
+                              0, 0, 10, 10, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(SearchID)), instance, nullptr);
     list_ = CreateWindowExW(0, L"LISTBOX", L"Search results", WS_CHILD | WS_VISIBLE | WS_VSCROLL |
                             LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
-                            0, 0, 10, 10, window_, reinterpret_cast<HMENU>(ListID), instance, nullptr);
+                            0, 0, 10, 10, window_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ListID)), instance, nullptr);
     if (!search_ || !list_) return false;
     SendMessageW(search_, EM_SETLIMITTEXT, 512, 0);
     SetWindowSubclass(search_, editProc, 1, reinterpret_cast<DWORD_PTR>(this));
@@ -250,8 +250,8 @@ void App::layout() {
 void App::position() {
     POINT point{}; GetCursorPos(&point);
     MONITORINFO info{sizeof(info)}; GetMonitorInfoW(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &info);
-    const int width = std::min(px(PanelWidth), info.rcWork.right - info.rcWork.left - px(24));
-    const int height = std::min(px(PanelHeight), info.rcWork.bottom - info.rcWork.top - px(24));
+    const int width = std::min(px(PanelWidth), static_cast<int>(info.rcWork.right - info.rcWork.left) - px(24));
+    const int height = std::min(px(PanelHeight), static_cast<int>(info.rcWork.bottom - info.rcWork.top) - px(24));
     const int x = info.rcWork.left + (info.rcWork.right - info.rcWork.left - width) / 2;
     const int y = info.rcWork.top + (info.rcWork.bottom - info.rcWork.top - height) * 2 / 5;
     SetWindowPos(window_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
@@ -450,7 +450,7 @@ void App::execute(Entry entry, bool copyOnly, bool confirmed) {
                 const auto it = std::find_if(settings_.quicklinks.begin(), settings_.quicklinks.end(), [&](const Quicklink& link) { return L"link:" + link.name == entry.id; });
                 if (it != settings_.quicklinks.end() && !it->keyword.empty()) {
                     setMode(Mode::Home); SetWindowTextW(search_, (it->keyword + L" ").c_str());
-                    SendMessageW(search_, EM_SETSEL, -1, -1); return;
+                    SendMessageW(search_, EM_SETSEL, static_cast<WPARAM>(-1), -1); return;
                 }
             }
             const auto [date, time] = dateAndTime();
