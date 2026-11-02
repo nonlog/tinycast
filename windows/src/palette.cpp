@@ -381,8 +381,21 @@ void App::refresh() {
     }
     std::vector<Entry> ranked;
     if ((mode_ == Mode::Settings || mode_ == Mode::Clipboard || mode_ == Mode::History) && text.empty()) ranked = std::move(entries);
-    else for (const auto index : rankEntries(entries, text, 100)) ranked.push_back(std::move(entries[index]));
+    else for (const auto index : rankEntries(entries, text, mode_ == Mode::Home && text.empty() ? entries.size() : 100))
+        ranked.push_back(std::move(entries[index]));
     if (mode_ == Mode::Home) {
+        if (text.empty()) {
+            // Keep deliberate pins and previously used entries first, then actual apps.
+            // Sorting before truncation prevents alphabetically early commands from
+            // crowding applications out of an otherwise empty launcher.
+            const auto category = [](const Entry& entry) {
+                return entry.pinned ? 0 : entry.useCount > 0 ? 1 : entry.kind == EntryKind::Application ? 2 : 3;
+            };
+            std::stable_sort(ranked.begin(), ranked.end(), [&](const Entry& left, const Entry& right) {
+                return category(left) < category(right);
+            });
+            if (ranked.size() > 100) ranked.resize(100);
+        }
         if (const auto calculation = calculate(text); calculation && !text.empty())
             ranked.insert(ranked.begin(), {L"calc:live", calculation->formatted, tr(L"Calculator · Enter to copy", L"计算器 · Enter 复制结果"), calculation->formatted, text, EntryKind::Calculator});
         for (const auto& link : settings_.quicklinks) {
@@ -1014,6 +1027,7 @@ void App::diagnostics(int failures) {
 
 void App::smokeTest() {
     int failures = 0;
+    if (visible_.empty() || visible_[0].kind != EntryKind::Application) ++failures;
     SetWindowTextW(search_, L"2+3*4");
     if (visible_.empty() || visible_[0].kind != EntryKind::Calculator || visible_[0].target != L"14") ++failures;
     SetWindowTextW(search_, L"记事本");
@@ -1022,7 +1036,22 @@ void App::smokeTest() {
     if (key(VK_RETURN)) ++failures;
     composing_ = false;
     if (clipboardListening_ || hotkeyRegistered_) ++failures;
-    SetWindowTextW(search_, L""); refresh();
+    SetWindowTextW(search_, L"g 中文 test");
+    if (visible_.empty() || visible_[0].kind != EntryKind::Quicklink || visible_[0].arguments != L"中文 test") ++failures;
+    setMode(Mode::Settings);
+    command({L"setting:clipboard", L"Clipboard", L"", L"", L"", EntryKind::Command}, false);
+    if (mode_ != Mode::Confirm || settings_.clipboardEnabled || visible_.empty() || visible_[0].id != L"confirm:cancel") ++failures;
+    activate();
+    if (mode_ != Mode::Settings || settings_.clipboardEnabled) ++failures;
+    execute({L"custom:fixture", L"Never execute", L"", L"does-not-exist.exe", L"", EntryKind::Command});
+    if (mode_ != Mode::Confirm || visible_.empty() || visible_[0].id != L"confirm:cancel") ++failures;
+    activate();
+    if (mode_ != Mode::Settings) ++failures;
+    const auto language = settings_.language;
+    settings_.language = L"zh-CN"; applyTheme(); refresh();
+    if (!chinese_ || visible_.empty() || visible_[0].title != L"外观") ++failures;
+    settings_.language = language; applyTheme();
+    setMode(Mode::Home);
     updateStatus(tr(L"Native Windows preview · No WebView · Clipboard history is off", L"原生 Windows 预览版 · 无 WebView · 剪贴板历史已关闭"));
     RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     if (!options_.capture.empty() && !captureBitmap(options_.capture)) ++failures;
