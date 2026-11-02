@@ -1,6 +1,7 @@
 #include "palette.hpp"
 
 #include <dwmapi.h>
+#include <objbase.h>
 #include <psapi.h>
 #include <shellapi.h>
 #include <uxtheme.h>
@@ -17,6 +18,7 @@ namespace tinycast {
 namespace {
 constexpr UINT AppsReady = WM_APP + 2, FilesReady = WM_APP + 3, TrayMessage = WM_APP + 4;
 constexpr UINT RefreshMessage = WM_APP + 5;
+constexpr UINT IconReady = WM_APP + 6;
 constexpr UINT_PTR FileTimer = 1, SmokeTimer = 2;
 constexpr int SearchID = 101, ListID = 102;
 constexpr unsigned HotkeyID = 1;
@@ -187,7 +189,7 @@ bool App::create(HINSTANCE instance, const std::wstring& className) {
                          {L"sample:code", L"Visual Studio Code", L"Application", L"", L"", EntryKind::Application}};
     } else {
         tray(true); registerShortcut(); clipboardSubscription();
-        startFileWorker(); refreshApplications();
+        startFileWorker(); startIconWorker(); refreshApplications();
     }
     refresh();
     if (!configWarning_.empty()) updateStatus(configWarning_);
@@ -205,7 +207,7 @@ int App::run() {
 }
 
 void App::makeFonts() {
-    for (auto font : {searchFont_, titleFont_, detailFont_, symbolFont_}) if (font) DeleteObject(font);
+    const std::array<HFONT, 4> previousFonts{searchFont_, titleFont_, detailFont_, symbolFont_};
     const auto make = [&](int size, int weight, const wchar_t* family) {
         return CreateFontW(-px(size), 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -218,6 +220,7 @@ void App::makeFonts() {
     SendMessageW(search_, WM_SETFONT, reinterpret_cast<WPARAM>(searchFont_), TRUE);
     SendMessageW(list_, WM_SETFONT, reinterpret_cast<WPARAM>(titleFont_), TRUE);
     SendMessageW(list_, LB_SETITEMHEIGHT, 0, px(54));
+    for (auto font : previousFonts) if (font) DeleteObject(font);
 }
 
 void App::applyTheme() {
@@ -280,17 +283,20 @@ void App::hide(bool restoreFocus) {
 void App::shutdown() {
     if (shuttingDown_) return;
     shuttingDown_ = true;
-    appWorker_.request_stop(); fileWorker_.request_stop();
+    appWorker_.request_stop(); fileWorker_.request_stop(); iconWorker_.request_stop();
     { std::lock_guard lock(fileMutex_); activeFileStop_.request_stop(); fileJob_.reset(); }
     fileCondition_.notify_all();
+    iconCondition_.notify_all();
     if (appWorker_.joinable()) appWorker_.join();
     if (fileWorker_.joinable()) fileWorker_.join();
+    if (iconWorker_.joinable()) iconWorker_.join();
     if (clipboardListening_) RemoveClipboardFormatListener(window_);
     if (hotkeyRegistered_) UnregisterHotKey(window_, HotkeyID);
     if (trayAdded_) tray(false);
     MSG message{};
     while (PeekMessageW(&message, window_, AppsReady, AppsReady, PM_REMOVE)) delete reinterpret_cast<std::vector<Entry>*>(message.lParam);
     while (PeekMessageW(&message, window_, FilesReady, FilesReady, PM_REMOVE)) delete reinterpret_cast<FileResult*>(message.lParam);
+    while (PeekMessageW(&message, window_, IconReady, IconReady, PM_REMOVE)) delete reinterpret_cast<IconResult*>(message.lParam);
     clips_.clear();
 }
 
@@ -639,7 +645,10 @@ void App::clipboardSubscription() {
     } else if (!clipboardListening_ && settings_.clipboardEnabled) {
         ignoredClipboardSequence_ = GetClipboardSequenceNumber();
         clipboardListening_ = AddClipboardFormatListener(window_) != FALSE;
-        if (!clipboardListening_) updateStatus(tr(L"Windows could not enable clipboard notifications.", L"Windows 无法启用剪贴板通知。"));
+        if (!clipboardListening_) {
+            settings_.clipboardEnabled = false;
+            updateStatus(tr(L"Windows could not enable clipboard notifications; recording remains off.", L"Windows 无法启用剪贴板通知，记录保持关闭。"));
+        }
     }
 }
 
@@ -689,6 +698,25 @@ void App::startFileWorker() {
     });
 }
 
+void App::startIconWorker() {
+    iconWorker_ = std::jthread([this, window = window_](std::stop_token stop) {
+        const auto apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        while (!stop.stop_requested()) {
+            IconJob job;
+            {
+                std::unique_lock lock(iconMutex_);
+                if (!iconCondition_.wait(lock, stop, [&] { return !iconJobs_.empty(); })) break;
+                job = std::move(iconJobs_.front()); iconJobs_.pop_front();
+            }
+            auto result = std::make_unique<IconResult>();
+            result->id = job.entry.id; result->generation = job.generation;
+            try { result->icon = loadEntryIcon(job.entry, job.pixels); } catch (...) { result->icon = nullptr; }
+            if (!stop.stop_requested() && PostMessageW(window, IconReady, 0, reinterpret_cast<LPARAM>(result.get()))) result.release();
+        }
+        if (SUCCEEDED(apartment)) CoUninitialize();
+    });
+}
+
 void App::scheduleFiles() {
     ++fileGeneration_;
     { std::lock_guard lock(fileMutex_); activeFileStop_.request_stop(); fileJob_.reset(); }
@@ -725,11 +753,12 @@ HICON App::entryIcon(const Entry& entry) {
     if (entry.kind != EntryKind::Application && entry.kind != EntryKind::File) return nullptr;
     if (options_.smoke) return nullptr;
     if (const auto found = iconCache_.find(entry.id); found != iconCache_.end()) return found->second;
-    if (iconCache_.size() >= 128) {
-        for (const auto& [key, icon] : iconCache_) if (icon) DestroyIcon(icon);
-        iconCache_.clear();
+    if (!pendingIcons_.contains(entry.id) && pendingIcons_.size() < 128) {
+        pendingIcons_.insert(entry.id);
+        { std::lock_guard lock(iconMutex_); iconJobs_.push_back({entry, px(28), iconGeneration_}); }
+        iconCondition_.notify_all();
     }
-    auto icon = loadEntryIcon(entry, px(28)); iconCache_[entry.id] = icon; return icon;
+    return nullptr;
 }
 
 void App::drawRow(const DRAWITEMSTRUCT& item) {
@@ -815,7 +844,11 @@ bool App::key(WPARAM key) {
         else hide();
         return true;
     }
-    if (key == VK_TAB && settings_.clipboardEnabled) { setMode(mode_ == Mode::Clipboard ? Mode::Home : Mode::Clipboard); return true; }
+    if (key == VK_TAB) {
+        if (settings_.clipboardEnabled && mode_ != Mode::Confirm) setMode(mode_ == Mode::Clipboard ? Mode::Home : Mode::Clipboard);
+        else SetFocus(GetFocus() == search_ ? list_ : search_);
+        return true;
+    }
     if (control && key == VK_OEM_COMMA) { setMode(Mode::Settings); return true; }
     if (control && key == L'D') { toggleFavorite(); return true; }
     if (control && key == L'A' && GetFocus() == search_) { SendMessageW(search_, EM_SETSEL, 0, -1); return true; }
@@ -872,6 +905,8 @@ LRESULT App::message(UINT message, WPARAM wParam, LPARAM lParam) {
         dpi_ = HIWORD(wParam); makeFonts();
         for (const auto& [key, icon] : iconCache_) if (icon) DestroyIcon(icon);
         iconCache_.clear();
+        ++iconGeneration_; pendingIcons_.clear();
+        { std::lock_guard lock(iconMutex_); iconJobs_.clear(); }
         const auto* rect = reinterpret_cast<const RECT*>(lParam);
         SetWindowPos(window_, nullptr, rect->left, rect->top, rect->right - rect->left, rect->bottom - rect->top, SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
@@ -883,6 +918,7 @@ LRESULT App::message(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_CLOSE: hide(); return 0;
     case WM_DESTROY: shutdown(); PostQuitMessage(0); return 0;
     case WM_HOTKEY:
+        if (modal_) return 0;
         if (IsWindowVisible(window_)) hide(); else { setMode(Mode::Home); show(); } return 0;
     case ShowMessage: setMode(Mode::Home); show(); return 0;
     case WM_CLIPBOARDUPDATE: captureClipboard(); return 0;
@@ -920,6 +956,19 @@ LRESULT App::message(UINT message, WPARAM wParam, LPARAM lParam) {
         if (mode_ == Mode::Files && result->generation == fileGeneration_) {
             fileResults_ = std::move(result->entries); filesBusy_ = false; refresh();
             updateStatus(result->failed ? tr(L"File search failed.", L"文件搜索失败。") : tr(L"Bounded results: up to 20,000 entries / 1.5 seconds. Not a complete disk index.", L"限额结果：最多扫描 2 万项 / 1.5 秒，并非完整磁盘索引。"));
+        }
+        return 0;
+    }
+    case IconReady: {
+        std::unique_ptr<IconResult> result(reinterpret_cast<IconResult*>(lParam));
+        if (result->generation == iconGeneration_) {
+            pendingIcons_.erase(result->id);
+            if (iconCache_.size() >= 128) {
+                for (const auto& [key, icon] : iconCache_) if (icon) DestroyIcon(icon);
+                iconCache_.clear();
+            }
+            iconCache_[result->id] = result->icon; result->icon = nullptr;
+            InvalidateRect(list_, nullptr, FALSE);
         }
         return 0;
     }

@@ -3,8 +3,10 @@
 #include "platform.hpp"
 #include <commctrl.h>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 
 namespace tinycast {
@@ -29,6 +31,11 @@ private:
     enum class Mode { Home, Clipboard, Files, Snippets, Quicklinks, History, Settings, Confirm };
     struct FileJob { std::wstring query; std::vector<std::wstring> roots; std::uint64_t generation{}; };
     struct FileResult { std::vector<Entry> entries; std::uint64_t generation{}; bool failed{}; };
+    struct IconJob { Entry entry; int pixels{}; std::uint64_t generation{}; };
+    struct IconResult {
+        std::wstring id; HICON icon{}; std::uint64_t generation{};
+        ~IconResult() { if (icon) DestroyIcon(icon); }
+    };
     struct Theme {
         COLORREF background{}, text{}, muted{}, faint{}, selection{}, hover{}, accent{}, control{};
     };
@@ -56,12 +63,17 @@ private:
     std::map<std::wstring, HICON> iconCache_;
     struct RestoreState { DWORD pid{}; WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)}; };
     std::map<HWND, RestoreState> restore_;
-    std::jthread appWorker_, fileWorker_;
+    std::jthread appWorker_, fileWorker_, iconWorker_;
     std::mutex fileMutex_;
     std::condition_variable_any fileCondition_;
     std::optional<FileJob> fileJob_;
     std::stop_source activeFileStop_;
     std::uint64_t fileGeneration_{};
+    std::mutex iconMutex_;
+    std::condition_variable_any iconCondition_;
+    std::deque<IconJob> iconJobs_;
+    std::set<std::wstring> pendingIcons_;
+    std::uint64_t iconGeneration_{};
 
     const wchar_t* tr(const wchar_t* en, const wchar_t* zh) const;
     int px(int value) const;
@@ -93,6 +105,7 @@ private:
     void captureClipboard();
     void refreshApplications();
     void startFileWorker();
+    void startIconWorker();
     void scheduleFiles();
     void launchFileJob();
     void paint();

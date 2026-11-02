@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <iterator>
 #include <limits>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 
@@ -29,6 +30,21 @@ using namespace winrt::Windows::Data::Json;
 struct Apartment {
     HRESULT result{RoInitialize(RO_INIT_SINGLETHREADED)};
     ~Apartment() { if (SUCCEEDED(result)) RoUninitialize(); }
+};
+
+std::mutex& jsonMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+// Settings values never expose WinRT objects. Serialize their activation scope and
+// release cached factories before its last COM reference can disappear. Otherwise
+// a later JsonObject::Parse can call a factory freed by RoUninitialize.
+// See microsoft/cppwinrt's clear_factory_cache and Old New Thing 2021-11-05.
+struct JsonSession {
+    std::unique_lock<std::mutex> lock{jsonMutex()};
+    Apartment apartment;
+    ~JsonSession() { winrt::clear_factory_cache(); }
 };
 struct Handle {
     HANDLE value{INVALID_HANDLE_VALUE};
@@ -156,6 +172,14 @@ bool excludedClipboardFormat() {
     return false;
 }
 
+bool isShellSurface(HWND window) {
+    if (window == GetDesktopWindow() || window == GetShellWindow()) return true;
+    wchar_t name[128]{};
+    GetClassNameW(window, name, static_cast<int>(std::size(name)));
+    return wcscmp(name, L"Progman") == 0 || wcscmp(name, L"WorkerW") == 0 ||
+           wcscmp(name, L"Shell_TrayWnd") == 0 || wcscmp(name, L"Shell_SecondaryTrayWnd") == 0;
+}
+
 }
 
 std::wstring errorMessage(unsigned long code) {
@@ -188,7 +212,7 @@ Settings loadSettings(std::wstring& warning) {
     warning.clear();
     Settings settings = defaults();
     try {
-        Apartment apartment;
+        JsonSession session;
         const auto path = settingsPath();
         Handle file{CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                 nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr)};
@@ -281,7 +305,7 @@ bool saveSettings(const Settings& settings, std::wstring& error) {
     error.clear();
     std::wstring temporary;
     try {
-        Apartment apartment;
+        JsonSession session;
         JsonObject root;
         root.Insert(L"schemaVersion", JsonValue::CreateNumberValue(1));
         putString(root, L"theme", settings.theme);
@@ -498,7 +522,7 @@ bool copyText(HWND owner, std::wstring_view text, std::wstring& error) {
 bool pasteText(HWND owner, HWND destination, std::wstring_view text, std::wstring& error) {
     error.clear();
     DWORD pid{};
-    if (!IsWindow(destination) || !GetWindowThreadProcessId(destination, &pid) || pid == GetCurrentProcessId()) {
+    if (!IsWindow(destination) || isShellSurface(destination) || !GetWindowThreadProcessId(destination, &pid) || pid == GetCurrentProcessId()) {
         error = L"The previous application is no longer available. Use Ctrl+Enter to copy instead."; return false;
     }
     SetForegroundWindow(destination);
@@ -522,6 +546,10 @@ bool pasteText(HWND owner, HWND destination, std::wstring_view text, std::wstrin
     events[2].ki.wVk = L'V'; events[2].ki.dwFlags = KEYEVENTF_KEYUP;
     events[3].ki.wVk = VK_CONTROL; events[3].ki.dwFlags = KEYEVENTF_KEYUP;
     if (SendInput(4, events, sizeof(INPUT)) != 4) {
+        INPUT release[2]{};
+        for (auto& event : release) { event.type = INPUT_KEYBOARD; event.ki.dwFlags = KEYEVENTF_KEYUP; }
+        release[0].ki.wVk = L'V'; release[1].ki.wVk = VK_CONTROL;
+        SendInput(2, release, sizeof(INPUT));
         error = L"Windows blocked simulated input (possibly an elevated app). The text is copied; paste it manually."; return false;
     }
     return true;
@@ -529,7 +557,7 @@ bool pasteText(HWND owner, HWND destination, std::wstring_view text, std::wstrin
 
 bool moveWindow(HWND target, WindowAction action, unsigned gap, std::wstring& error) {
     DWORD pid{};
-    if (!IsWindow(target) || !IsWindowVisible(target) ||
+    if (!IsWindow(target) || isShellSurface(target) || !IsWindowVisible(target) ||
         !GetWindowThreadProcessId(target, &pid) || pid == GetCurrentProcessId()) {
         error = L"No movable application window was selected."; return false;
     }

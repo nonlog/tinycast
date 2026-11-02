@@ -94,7 +94,9 @@ int main() {
         std::stop_source stopped; stopped.request_stop();
         check(searchFiles({files.wstring()}, L"report", stopped.get_token(), 10).empty(), "cancelled search returns promptly");
         check(!moveWindow(nullptr, WindowAction::LeftHalf, 8, error), "invalid target window rejected");
+        check(!moveWindow(GetDesktopWindow(), WindowAction::LeftHalf, 8, error), "desktop surface cannot be rearranged");
         check(!pasteText(nullptr, nullptr, L"never copied", error), "invalid paste destination rejected before touching clipboard");
+        check(!pasteText(nullptr, GetDesktopWindow(), L"never copied", error), "desktop paste target rejected");
     } catch (...) { ++failures; std::cerr << "Unexpected platform-test exception\n"; }
     std::error_code cleanup;
     fs::remove_all(root, cleanup);
