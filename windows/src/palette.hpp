@@ -77,6 +77,7 @@ private:
 
     const wchar_t* tr(const wchar_t* en, const wchar_t* zh) const;
     int px(int value) const;
+    int desiredHeight() const;
     std::wstring query() const;
     std::wstring modeName() const;
     std::wstring emptyMessage() const;

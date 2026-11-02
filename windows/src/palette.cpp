@@ -111,6 +111,10 @@ App::~App() {
 const wchar_t* App::tr(const wchar_t* en, const wchar_t* zh) const { return chinese_ ? zh : en; }
 int App::px(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
 
+int App::desiredHeight() const {
+    return px(std::clamp(184 + static_cast<int>(std::min<std::size_t>(visible_.size(), 6)) * 54, 260, PanelHeight));
+}
+
 std::wstring App::query() const {
     const int length = GetWindowTextLengthW(search_);
     std::wstring value(static_cast<std::size_t>(length) + 1, L'\0');
@@ -168,7 +172,7 @@ bool App::create(HINSTANCE instance, const std::wstring& className) {
     cls.lpszClassName = className.c_str();
     if (!RegisterClassExW(&cls)) return false;
     window_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, className.c_str(), L"Tinycast Windows Preview",
-                              WS_POPUP | WS_THICKFRAME, CW_USEDEFAULT, CW_USEDEFAULT, PanelWidth, PanelHeight,
+                              WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, PanelWidth, PanelHeight,
                               nullptr, nullptr, instance, this);
     if (!window_) return false;
     dpi_ = GetDpiForWindow(window_);
@@ -254,7 +258,7 @@ void App::position() {
     POINT point{}; GetCursorPos(&point);
     MONITORINFO info{sizeof(info)}; GetMonitorInfoW(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &info);
     const int width = std::min(px(PanelWidth), static_cast<int>(info.rcWork.right - info.rcWork.left) - px(24));
-    const int height = std::min(px(PanelHeight), static_cast<int>(info.rcWork.bottom - info.rcWork.top) - px(24));
+    const int height = std::min(desiredHeight(), static_cast<int>(info.rcWork.bottom - info.rcWork.top) - px(24));
     const int x = info.rcWork.left + (info.rcWork.right - info.rcWork.left - width) / 2;
     const int y = info.rcWork.top + (info.rcWork.bottom - info.rcWork.top - height) * 2 / 5;
     SetWindowPos(window_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
@@ -416,6 +420,14 @@ void App::refresh() {
 
 void App::setResults(std::vector<Entry> results) {
     visible_ = std::move(results);
+    if (IsWindowVisible(window_)) {
+        RECT rect{}; GetWindowRect(window_, &rect);
+        MONITORINFO monitor{sizeof(monitor)};
+        GetMonitorInfoW(MonitorFromWindow(window_, MONITOR_DEFAULTTONEAREST), &monitor);
+        const auto height = std::min(desiredHeight(), static_cast<int>(monitor.rcWork.bottom - monitor.rcWork.top) - px(24));
+        if (rect.bottom - rect.top != height)
+            SetWindowPos(window_, nullptr, 0, 0, rect.right - rect.left, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
     SendMessageW(list_, WM_SETREDRAW, FALSE, 0);
     SendMessageW(list_, LB_RESETCONTENT, 0, 0);
     for (const auto& entry : visible_) SendMessageW(list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(entry.title.c_str()));
@@ -909,7 +921,7 @@ LRESULT CALLBACK App::windowProc(HWND window, UINT message, WPARAM wParam, LPARA
 LRESULT App::message(UINT message, WPARAM wParam, LPARAM lParam) {
     if (taskbarCreated_ && message == taskbarCreated_ && !options_.smoke) { trayAdded_ = false; tray(true); return 0; }
     switch (message) {
-    case WM_NCCALCSIZE: if (wParam) return 0; break;
+    case WM_NCCALCSIZE: return 0;
     case WM_NCHITTEST: return HTCLIENT;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: if (background_) paint(); else { PAINTSTRUCT p{}; BeginPaint(window_, &p); EndPaint(window_, &p); } return 0;
