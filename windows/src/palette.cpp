@@ -112,7 +112,10 @@ const wchar_t* App::tr(const wchar_t* en, const wchar_t* zh) const { return chin
 int App::px(int value) const { return MulDiv(value, static_cast<int>(dpi_), 96); }
 
 int App::desiredHeight() const {
-    return px(std::clamp(184 + static_cast<int>(std::min<std::size_t>(visible_.size(), 6)) * 54, 260, PanelHeight));
+    // Round each native row once, then sum pixel heights. Scaling the total logical
+    // height instead can leave a 1-3px overflow and an unnecessary scrollbar at 125%.
+    return std::clamp(px(184) + static_cast<int>(std::min<std::size_t>(visible_.size(), 6)) * px(54),
+                      px(260), px(PanelHeight));
 }
 
 std::wstring App::query() const {
@@ -1040,6 +1043,12 @@ void App::diagnostics(int failures) {
 void App::smokeTest() {
     int failures = 0;
     if (visible_.empty() || visible_[0].kind != EntryKind::Application) ++failures;
+    const auto savedDpi = dpi_;
+    for (const unsigned testDpi : {120u, 144u, 168u}) {
+        dpi_ = testDpi;
+        if (desiredHeight() < px(184) + 6 * px(54)) ++failures;
+    }
+    dpi_ = savedDpi;
     SetWindowTextW(search_, L"2+3*4");
     if (visible_.empty() || visible_[0].kind != EntryKind::Calculator || visible_[0].target != L"14") ++failures;
     SetWindowTextW(search_, L"记事本");

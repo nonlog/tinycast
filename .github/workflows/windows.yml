@@ -88,6 +88,33 @@ jobs:
           Compress-Archive -Path "$stage/*" -DestinationPath windows/dist/Tinycast-Windows-x64.zip -Force
           $hash = (Get-FileHash windows/dist/Tinycast-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  Tinycast-Windows-x64.zip" | Set-Content windows/dist/SHA256SUMS.txt -Encoding ascii
+          $releaseBase = "https://github.com/$($env:BUILD_REPOSITORY)/releases/download"
+          $manifest = [ordered]@{
+            version = '0.1.0-preview.1'
+            description = 'Native Windows Tinycast preview without a browser runtime'
+            homepage = "https://github.com/$($env:BUILD_REPOSITORY)"
+            license = 'AGPL-3.0'
+            architecture = @{'64bit' = @{
+              url = "$releaseBase/windows-v0.1.0-preview.1/Tinycast-Windows-x64.zip"
+              hash = $hash
+            }}
+            bin = 'Tinycast.exe'
+            shortcuts = ,@('Tinycast.exe', 'Tinycast')
+            notes = 'Preview: Ctrl+Alt+Space opens the palette. Clipboard history and sign-in startup are off by default. Quit the tray app before updating. Settings live in %LOCALAPPDATA%\TinycastWindows. Raycast extensions and AI/MCP are not yet ported.'
+            checkver = @{
+              url = "https://api.github.com/repos/$($env:BUILD_REPOSITORY)/releases"
+              jsonpath = '$[0].tag_name'
+              regex = 'windows-v(.+)'
+            }
+            autoupdate = @{architecture = @{'64bit' = @{
+              url = "$releaseBase/windows-v`$version/Tinycast-Windows-x64.zip"
+            }}}
+          }
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content windows/dist/tinycast.json -Encoding utf8
+          $parsed = Get-Content windows/dist/tinycast.json -Raw | ConvertFrom-Json
+          if ($parsed.architecture.'64bit'.hash -ne $hash -or $parsed.shortcuts[0][0] -ne 'Tinycast.exe') {
+            throw 'Generated Scoop manifest failed structural checks'
+          }
           "## Windows native preview`n`n- Core/platform tests and native light/dark UI smoke tests passed.`n- Artifact SHA-256: ``$hash```n- Commit: ``$($env:BUILD_SHA)```n- Not tested: real CJK IME, elevated-window interactions, mixed-DPI physical monitors.`n- No macOS build was run." >> $env:GITHUB_STEP_SUMMARY
 
       - uses: actions/upload-artifact@v7
@@ -96,6 +123,7 @@ jobs:
           path: |
             windows/dist/Tinycast-Windows-x64.zip
             windows/dist/SHA256SUMS.txt
+            windows/dist/tinycast.json
           retention-days: 3
           if-no-files-found: error
 
@@ -136,5 +164,5 @@ jobs:
 
           Default shortcut: Ctrl+Alt+Space. Clipboard history and sign-in startup are off by default. Unsigned x64 executable; no administrator access required. Each package contains the exact source commit and license.
           EOF
-          gh release create "$TAG" dist/Tinycast-Windows-x64.zip dist/SHA256SUMS.txt \
+          gh release create "$TAG" dist/Tinycast-Windows-x64.zip dist/SHA256SUMS.txt dist/tinycast.json \
             --title "Tinycast Windows ${TAG#windows-v}" --prerelease --notes-file notes.md

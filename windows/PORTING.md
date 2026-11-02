@@ -20,7 +20,7 @@ under `windows/`, with explicit behavioral adaptations, not a binary-compatible 
 | Raycast extensions | Not ported | JS runtime, native component renderer, API/permissions/OAuth compatibility |
 | AI/MCP and dictation | Not ported | Windows service/provider design and credential storage before enabling |
 | Calendar/notes/dictionary | Not ported | Native Windows implementations and integration choices |
-| Updating | Portable CI build; no autonomous updater | Versioned Scoop distribution manifest and validated release process |
+| Updating | Portable CI build and checksum-matched Scoop release manifest; no autonomous updater | Ongoing bucket version maintenance and signing |
 
 ## Adapted source behavior
 

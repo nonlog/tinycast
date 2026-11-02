@@ -10,6 +10,15 @@ The original macOS app remains unchanged. The Windows port is AGPL-3.0 too.
 `SHA256SUMS.txt` 后解压，运行 `Tinycast.exe`。面向 Windows 11 x64；无需管理员权限。
 这是未签名的预览程序，不要关闭系统安全保护，也不要把“可运行”当作所有功能已验收。
 
+发布页同时附带由 CI 根据实际 ZIP 校验值生成的 `tinycast.json`，可交给 Scoop 安装：
+
+```powershell
+scoop install https://github.com/nonlog/tinycast/releases/download/windows-v0.1.0-preview.1/tinycast.json
+```
+
+使用你现有的 Scoop 安装目录，不要求安装到 C 盘。升级前先从托盘退出程序。
+直接从这个版本专属 URL 安装不会替你监控未来版本；后续更新应使用维护中的 Scoop bucket 或新版发布清单。
+
 默认全局快捷键是 **Ctrl+Alt+Space**。关闭面板不会结束进程，退出请使用托盘菜单。
 没有安装浏览器运行时，没有自动更新器，也不会默认开启登录启动。
 
@@ -61,7 +70,8 @@ This is a usable first Windows implementation, **not full Tinycast parity**. It 
 extensions, AI/MCP, dictation, calendar integrations, image clipboard/OCR, automatic snippet expansion,
 or the full macOS calculator/Spaces/Rooms feature set. See [PORTING.md](PORTING.md).
 
-The UI uses a native Unicode Edit control and an owner-drawn native ListBox. IME composition is left to
+The UI uses a native Unicode Edit control and an owner-drawn native ListBox, with a result-sized panel
+and row-height checks at 125%, 150% and 175% scaling. IME composition is left to
 Windows; command keys are suppressed during composition. Automated Unicode round-trip and synthetic
 composition checks are not a substitute for testing a real Microsoft Pinyin/Japanese/Korean IME.
 
